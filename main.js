@@ -1,14 +1,16 @@
-import WindowManager from './WindowManager.js'
+import WindowManager from "./WindowManager.js";
+import * as THREE from "three";
+import { FlyControls } from "three/addons/controls/FlyControls.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 
-
-
-const t = THREE;
 let camera, scene, renderer, world;
 let near, far;
 let pixR = window.devicePixelRatio ? window.devicePixelRatio : 1;
-let cubes = [];
-let sceneOffsetTarget = {x: 0, y: 0};
-let sceneOffset = {x: 0, y: 0};
+let toruses = [];
+let sceneOffsetTarget = { x: 0, y: 0 };
+let sceneOffset = { x: 0, y: 0 };
 
 let today = new Date();
 today.setHours(0);
@@ -20,178 +22,217 @@ today = today.getTime();
 let internalTime = getTime();
 let windowManager;
 let initialized = false;
+let controls;
+const clock = new THREE.Clock();
+
+let composer, bloomPass;
 
 // get time in seconds since beginning of the day (so that all windows use the same time)
-function getTime ()
-{
-	return (new Date().getTime() - today) / 1000.0;
+function getTime() {
+  return (new Date().getTime() - today) / 1000.0;
 }
 
+if (new URLSearchParams(window.location.search).get("clear")) {
+  localStorage.clear();
+} else {
+  // this code is essential to circumvent that some browsers preload the content of some pages before you actually hit the url
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState != "hidden" && !initialized) {
+      init();
+    }
+  });
 
-if (new URLSearchParams(window.location.search).get("clear"))
-{
-	localStorage.clear();
-}
-else
-{	
-	// this code is essential to circumvent that some browsers preload the content of some pages before you actually hit the url
-	document.addEventListener("visibilitychange", () => 
-	{
-		if (document.visibilityState != 'hidden' && !initialized)
-		{
-			init();
-		}
-	});
+  window.onload = () => {
+    if (document.visibilityState != "hidden") {
+      init();
+    }
+  };
 
-	window.onload = () => {
-		if (document.visibilityState != 'hidden')
-		{
-			init();
-		}
-	};
+  function init() {
+    initialized = true;
 
-	function init ()
-	{
-		initialized = true;
+    // add a short timeout because window.offsetX reports wrong values before a short period
+    setTimeout(() => {
+      setupScene();
+      setupWindowManager();
+      resize();
+      updateWindowShape(false);
+      render();
+      window.addEventListener("resize", resize);
+    }, 500);
+  }
 
-		// add a short timeout because window.offsetX reports wrong values before a short period 
-		setTimeout(() => {
-			setupScene();
-			setupWindowManager();
-			resize();
-			updateWindowShape(false);
-			render();
-			window.addEventListener('resize', resize);
-		}, 500)	
-	}
+  function setupScene() {
+    camera = new THREE.PerspectiveCamera(
+      45,
+      window.innerWidth / window.innerHeight,
+      1,
+      15000
+    );
+    camera.position.z = 1000;
 
-	function setupScene ()
-	{
-		camera = new t.OrthographicCamera(0, 0, window.innerWidth, window.innerHeight, -10000, 10000);
-		
-		camera.position.z = 2.5;
-		near = camera.position.z - .5;
-		far = camera.position.z + 0.5;
+    scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x000000, 1, 15000);
 
-		scene = new t.Scene();
-		scene.background = new t.Color(0.0);
-		scene.add( camera );
+    const pointLight = new THREE.PointLight(0xff2200, 3, 0, 0);
+    pointLight.position.set(0, 0, 0);
+    scene.add(pointLight);
 
-		renderer = new t.WebGLRenderer({antialias: true, depthBuffer: true});
-		renderer.setPixelRatio(pixR);
-	    
-	  	world = new t.Object3D();
-		scene.add(world);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 3);
+    dirLight.position.set(0, 0, 1).normalize();
+    scene.add(dirLight);
 
-		renderer.domElement.setAttribute("id", "scene");
-		document.body.appendChild( renderer.domElement );
-	}
+    const material = new THREE.MeshLambertMaterial({
+      color: 0xffffff,
+      wireframe: true,
+    });
 
-	function setupWindowManager ()
-	{
-		windowManager = new WindowManager();
-		windowManager.setWinShapeChangeCallback(updateWindowShape);
-		windowManager.setWinChangeCallback(windowsUpdated);
+    for (let j = 0; j < 1000; j++) {
+      const radius = Math.random() * 10 + 5;
+      const tube = Math.random() * 5 + 1;
+      const tubularSegments = Math.floor(Math.random() * 150) + 50;
+      const radialSegments = Math.floor(Math.random() * 20) + 8;
+      const p = Math.floor(Math.random() * 10) + 2;
+      const q = Math.floor(Math.random() * 10) + 2;
 
-		// here you can add your custom metadata to each windows instance
-		let metaData = {foo: "bar"};
+      const torusKnot = new THREE.Mesh(
+        new THREE.TorusKnotGeometry(
+          radius,
+          tube,
+          tubularSegments,
+          radialSegments,
+          p,
+          q
+        ),
+        material
+      );
 
-		// this will init the windowmanager and add this window to the centralised pool of windows
-		windowManager.init(metaData);
+      const scale = Math.random() * 15 + 2;
+      torusKnot.scale.set(scale, scale, scale);
+      torusKnot.position.x = 10000 * (0.5 - Math.random());
+      torusKnot.position.y = 7500 * (0.5 - Math.random());
+      torusKnot.position.z = 10000 * (0.5 - Math.random());
+      torusKnot.rotationSpeed = {
+        x: Math.random() * 0.05 - 0.025,
+        y: Math.random() * 0.05 - 0.025,
+        z: Math.random() * 0.05 - 0.025,
+      };
+      scene.add(torusKnot);
+      toruses.push(torusKnot);
+    }
 
-		// call update windows initially (it will later be called by the win change callback)
-		windowsUpdated();
-	}
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(pixR);
+    renderer.setClearColor(0x000000, 1);
+    renderer.toneMapping = THREE.ReinhardToneMapping;
 
-	function windowsUpdated ()
-	{
-		updateNumberOfCubes();
-	}
+    world = new THREE.Object3D();
+    scene.add(world);
 
-	function updateNumberOfCubes ()
-	{
-		let wins = windowManager.getWindows();
+    renderer.domElement.setAttribute("id", "scene");
+    document.body.appendChild(renderer.domElement);
 
-		// remove all cubes
-		cubes.forEach((c) => {
-			world.remove(c);
-		})
+    controls = new FlyControls(camera, renderer.domElement);
+    controls.movementSpeed = 1000;
+    controls.rollSpeed = Math.PI / 10;
 
-		cubes = [];
+    const renderScene = new RenderPass(scene, camera);
 
-		// add new cubes based on the current window setup
-		for (let i = 0; i < wins.length; i++)
-		{
-			let win = wins[i];
+    bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      1.5,
+      0.4,
+      0.85
+    );
+    bloomPass.threshold = 0;
+    bloomPass.strength = 0;
+    bloomPass.radius = 0;
 
-			let c = new t.Color();
-			c.setHSL(i * .1, 1.0, .5);
+    composer = new EffectComposer(renderer);
+    composer.addPass(renderScene);
+    composer.addPass(bloomPass);
+  }
 
-			let s = 100 + i * 50;
-			let cube = new t.Mesh(new t.BoxGeometry(s, s, s), new t.MeshBasicMaterial({color: c , wireframe: true}));
-			cube.position.x = win.shape.x + (win.shape.w * .5);
-			cube.position.y = win.shape.y + (win.shape.h * .5);
+  function setupWindowManager() {
+    windowManager = new WindowManager();
+    windowManager.setWinShapeChangeCallback(updateWindowShape);
+    windowManager.setWinChangeCallback(windowsUpdated);
 
-			world.add(cube);
-			cubes.push(cube);
-		}
-	}
+    // here you can add your custom metadata to each windows instance
+    let metaData = { foo: "bar" };
 
-	function updateWindowShape (easing = true)
-	{
-		// storing the actual offset in a proxy that we update against in the render function
-		sceneOffsetTarget = {x: -window.screenX, y: -window.screenY};
-		if (!easing) sceneOffset = sceneOffsetTarget;
-	}
+    // this will init the windowmanager and add this window to the centralised pool of windows
+    windowManager.init(metaData);
 
+    // call update windows initially (it will later be called by the win change callback)
+    windowsUpdated();
+  }
 
-	function render ()
-	{
-		let t = getTime();
+  function windowsUpdated() {
+    updateNumberOfToruses();
+  }
 
-		windowManager.update();
+  function updateNumberOfToruses() {
+    let wins = windowManager.getWindows();
 
+    // update the positions of existing Torusknots based on the current window positions
+    for (let i = 0; i < Math.min(toruses.length, wins.length); i++) {
+      let torusKnot = toruses[i];
+      let win = wins[i];
 
-		// calculate the new position based on the delta between current offset and new offset times a falloff value (to create the nice smoothing effect)
-		let falloff = .05;
-		sceneOffset.x = sceneOffset.x + ((sceneOffsetTarget.x - sceneOffset.x) * falloff);
-		sceneOffset.y = sceneOffset.y + ((sceneOffsetTarget.y - sceneOffset.y) * falloff);
+      let posTarget = {
+        x: win.shape.x + win.shape.w * 0.5,
+        y: win.shape.y + win.shape.h * 0.5,
+      };
 
-		// set the world position to the offset
-		world.position.x = sceneOffset.x;
-		world.position.y = sceneOffset.y;
+      torusKnot.position.x = posTarget.x;
+      torusKnot.position.y = posTarget.y;
+    }
+  }
 
-		let wins = windowManager.getWindows();
+  function updateWindowShape(easing = true) {
+    // storing the actual offset in a proxy that we update against in the render function
+    sceneOffsetTarget = { x: -window.screenX, y: -window.screenY };
+    if (!easing) sceneOffset = sceneOffsetTarget;
+  }
 
+  function render() {
+    let t = getTime();
 
-		// loop through all our cubes and update their positions based on current window positions
-		for (let i = 0; i < cubes.length; i++)
-		{
-			let cube = cubes[i];
-			let win = wins[i];
-			let _t = t;// + i * .2;
+    windowManager.update();
 
-			let posTarget = {x: win.shape.x + (win.shape.w * .5), y: win.shape.y + (win.shape.h * .5)}
+    // calculate the new position based on the delta between current offset and new offset times a falloff value (to create the nice smoothing effect)
+    let falloff = 0.05;
+    sceneOffset.x =
+      sceneOffset.x + (sceneOffsetTarget.x - sceneOffset.x) * falloff;
+    sceneOffset.y =
+      sceneOffset.y + (sceneOffsetTarget.y - sceneOffset.y) * falloff;
 
-			cube.position.x = cube.position.x + (posTarget.x - cube.position.x) * falloff;
-			cube.position.y = cube.position.y + (posTarget.y - cube.position.y) * falloff;
-			cube.rotation.x = _t * .5;
-			cube.rotation.y = _t * .3;
-		};
+    // set the world position to the offset
+    world.position.x = sceneOffset.x;
+    world.position.y = sceneOffset.y;
 
-		renderer.render(scene, camera);
-		requestAnimationFrame(render);
-	}
+    // rotate the Torusknots based on their individual rotation speeds
+    toruses.forEach((torusKnot) => {
+      torusKnot.rotation.x += torusKnot.rotationSpeed.x;
+      torusKnot.rotation.y += torusKnot.rotationSpeed.y;
+      torusKnot.rotation.z += torusKnot.rotationSpeed.z;
+    });
 
+    controls.update(clock.getDelta());
+    composer.render();
+    requestAnimationFrame(render);
+  }
 
-	// resize the renderer to fit the window size
-	function resize ()
-	{
-		let width = window.innerWidth;
-		let height = window.innerHeight
-		
-		camera = new t.OrthographicCamera(0, width, 0, height, -10000, 10000);
-		camera.updateProjectionMatrix();
-		renderer.setSize( width, height );
-	}
+  // resize the renderer to fit the window size
+  function resize() {
+    let width = window.innerWidth;
+    let height = window.innerHeight;
+
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+
+    renderer.setSize(width, height);
+    composer.setSize(width, height);
+  }
 }
